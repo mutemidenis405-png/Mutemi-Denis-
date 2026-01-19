@@ -1,0 +1,73 @@
+# .github/workflows/build-monster.yml
+name: Build Monster v2.4 APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout the full repository
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Java 17
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 3. Set up Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools: 34.0.0
+          ndk: 25.2.9519653
+
+      # 4. Cache Gradle dependencies for faster builds
+      - name: Cache Gradle
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-
+
+      # 5. Grant execute permission for Gradle
+      - name: Grant Gradle Execute
+        run: chmod +x ./gradlew
+
+      # 6. Clean previous builds
+      - name: Clean Build
+        run: ./gradlew clean
+
+      # 7. Build Debug APK
+      - name: Assemble Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      # 8. Optional: Build Release APK
+      #- name: Assemble Release APK
+      #  run: ./gradlew assembleRelease --no-daemon
+
+      # 9. Upload APK artifact (debug)
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Monster-v2.4-Debug-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      # 10. Upload APK artifact (release) — optional
+      #- name: Upload Release APK Artifact
+      #  uses: actions/upload-artifact@v4
+      #  with:
+      #    name: Monster-v2.4-Release-APK
+      #    path: app/build/outputs/apk/release/app-release.apk
