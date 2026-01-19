@@ -1,2 +1,1442 @@
-# Mutemi-Denis-
-Offline AI study system for beginners 
+
+// -------------------- Phase 1: MonsterAI.kt --------------------
+package com.monster.study.ai
+
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * MonsterAI
+ * Offline, deterministic language interpretation engine.
+ * No neural networks. No internet. Fully explainable.
+ */
+object MonsterAI {
+
+    // -------------------- Internal Memory --------------------
+
+    // Tracks how often certain intents fail or succeed
+    private val intentConfidence = ConcurrentHashMap<String, Int>()
+
+    // Tracks preferred explanation style per intent
+    private val explanationStyle = ConcurrentHashMap<String, String>()
+
+    // -------------------- Public API --------------------
+
+    /**
+     * Main entry point.
+     * Takes raw human language and returns a structured response.
+     */
+    fun interpret(input: String): AIResponse {
+        val normalized = normalize(input)
+        val intent = detectIntent(normalized)
+        val entities = extractEntities(normalized)
+
+        adjustLearning(intent)
+
+        return AIResponse(
+            intent = intent,
+            entities = entities,
+            responseStyle = explanationStyle[intent] ?: "simple"
+        )
+    }
+
+    /**
+     * Feedback loop.
+     * Called by other modules when a response helped or failed.
+     */
+    fun feedback(intent: String, success: Boolean) {
+        val score = intentConfidence.getOrDefault(intent, 0)
+        intentConfidence[intent] = if (success) score + 1 else score - 1
+
+        // Adapt explanation style deterministically
+        if (!success) {
+            explanationStyle[intent] = "simpler"
+        } else if (score > 3) {
+            explanationStyle[intent] = "concise"
+        }
+    }
+
+    // -------------------- Core NLP (Rule-Based) --------------------
+
+    private fun normalize(text: String): String {
+        return text.lowercase(Locale.US)
+            .replace(Regex("[^a-z0-9\\s]"), "")
+            .trim()
+    }
+
+    private fun detectIntent(text: String): String {
+        return when {
+            containsAny(text, "remember", "save this", "note this") -> "MEMORY_STORE"
+            containsAny(text, "forget", "delete memory", "remove this") -> "MEMORY_DELETE"
+            containsAny(text, "what is", "explain", "define") -> "EXPLANATION"
+            containsAny(text, "quiz me", "test me", "mcq") -> "QUIZ"
+            containsAny(text, "summarize", "recap") -> "SUMMARY"
+            containsAny(text, "video", "visual", "watch") -> "VIDEO_REQUEST"
+            containsAny(text, "search", "find", "lookup") -> "DOCUMENT_SEARCH"
+            else -> "UNKNOWN"
+        }
+    }
+
+    private fun extractEntities(text: String): Map<String, String> {
+        val entities = mutableMapOf<String, String>()
+
+        when {
+            text.contains("about") -> {
+                entities["topic"] = text.substringAfter("about").trim()
+            }
+            text.startsWith("what is") -> {
+                entities["topic"] = text.removePrefix("what is").trim()
+            }
+            text.startsWith("define") -> {
+                entities["topic"] = text.removePrefix("define").trim()
+            }
+        }
+
+        return entities
+    }
+
+    private fun containsAny(text: String, vararg keywords: String): Boolean {
+        return keywords.any { text.contains(it) }
+    }
+
+    // -------------------- Learning Logic --------------------
+
+    private fun adjustLearning(intent: String) {
+        val score = intentConfidence.getOrDefault(intent, 0)
+
+        if (score < -2) {
+            explanationStyle[intent] = "very_simple"
+        } else if (score > 5) {
+            explanationStyle[intent] = "advanced"
+        }
+    }
+}
+
+/**
+ * Clean structured output.
+ * Other modules must depend on this, not raw strings.
+ */
+data class AIResponse(
+    val intent: String,
+    val entities: Map<String, String>,
+    val responseStyle: String
+)
+// -------------------- Phase 2: MemoryManager.kt --------------------
+package com.monster.study.memory
+
+import android.content.Context
+import org.json.JSONObject
+
+/**
+ * MemoryManager
+ * Offline, persistent, user-controlled memory system.
+ * No AI logic here. No UI. No assumptions.
+ */
+object MemoryManager {
+
+    private const val PREF_NAME = "monster_memory_store"
+    private const val KEY_MEMORY_JSON = "memory_json"
+
+    private val cache: MutableMap<String, String> = mutableMapOf()
+
+    // -------------------- Lifecycle --------------------
+
+    /**
+     * Must be called once at app startup.
+     */
+    fun load(context: Context) {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_MEMORY_JSON, "{}") ?: "{}"
+        val json = JSONObject(raw)
+
+        cache.clear()
+        json.keys().forEach { key ->
+            cache[key] = json.getString(key)
+        }
+    }
+
+    /**
+     * Persists current memory to disk.
+     */
+    private fun persist(context: Context) {
+        val json = JSONObject()
+        cache.forEach { (k, v) -> json.put(k, v) }
+
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_MEMORY_JSON, json.toString())
+            .apply()
+    }
+
+    // -------------------- Public API --------------------
+
+    /**
+     * Remember something explicitly.
+     * Overwrites existing key if present.
+     */
+    fun remember(context: Context, key: String, value: String) {
+        cache[key.trim().lowercase()] = value.trim()
+        persist(context)
+    }
+
+    /**
+     * Recall memory by key.
+     * Returns null if not found.
+     */
+    fun recall(key: String): String? {
+        return cache[key.trim().lowercase()]
+    }
+
+    /**
+     * Forget a specific memory.
+     * Returns true if something was removed.
+     */
+    fun forget(context: Context, key: String): Boolean {
+        val removed = cache.remove(key.trim().lowercase()) != null
+        if (removed) persist(context)
+        return removed
+    }
+
+    /**
+     * Clears all stored memory.
+     * This is destructive and intentional.
+     */
+    fun forgetAll(context: Context) {
+        cache.clear()
+        persist(context)
+    }
+
+    /**
+     * Used by AI to list what it remembers (titles only).
+     */
+    fun listKeys(): List<String> {
+        return cache.keys.sorted()
+    }
+}
+
+// -------------------- Phase 3: DocumentLibrary.kt --------------------
+package com.monster.study.library
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.Locale
+
+/**
+ * DocumentLibrary
+ * Offline document indexing and retrieval engine.
+ * Documents are registered, categorized, and searchable.
+ */
+object DocumentLibrary {
+
+    private const val LIBRARY_FILE = "monster_library.json"
+
+    // In-memory index
+    private val documents = mutableListOf<LibraryDocument>()
+
+    // -------------------- Lifecycle --------------------
+
+    /**
+     * Load library from disk.
+     * Must be called once at startup.
+     */
+    fun load(context: Context) {
+        documents.clear()
+        val file = File(context.filesDir, LIBRARY_FILE)
+        if (!file.exists()) return
+
+        val json = JSONArray(file.readText())
+        for (i in 0 until json.length()) {
+            val obj = json.getJSONObject(i)
+            documents.add(
+                LibraryDocument(
+                    id = obj.getString("id"),
+                    title = obj.getString("title"),
+                    category = obj.getString("category"),
+                    content = obj.getString("content"),
+                    keywords = obj.getJSONArray("keywords").toList()
+                )
+            )
+        }
+    }
+
+    /**
+     * Persist library to disk.
+     */
+    private fun persist(context: Context) {
+        val array = JSONArray()
+        documents.forEach { doc ->
+            val obj = JSONObject()
+            obj.put("id", doc.id)
+            obj.put("title", doc.title)
+            obj.put("category", doc.category)
+            obj.put("content", doc.content)
+            obj.put("keywords", JSONArray(doc.keywords))
+            array.put(obj)
+        }
+        File(context.filesDir, LIBRARY_FILE).writeText(array.toString())
+    }
+
+    // -------------------- Public API --------------------
+
+    /**
+     * Add or replace a document.
+     */
+    fun addDocument(context: Context, doc: LibraryDocument) {
+        documents.removeAll { it.id == doc.id }
+        documents.add(doc)
+        persist(context)
+    }
+
+    /**
+     * List all categories (courses / subjects).
+     */
+    fun listCategories(): List<String> {
+        return documents.map { it.category }.distinct().sorted()
+    }
+
+    /**
+     * Get documents by category.
+     */
+    fun getByCategory(category: String): List<LibraryDocument> {
+        return documents.filter {
+            it.category.equals(category, ignoreCase = true)
+        }
+    }
+
+    /**
+     * Keyword-based offline search.
+     * Used by AI, revision, and video recommendation logic.
+     */
+    fun search(query: String): List<LibraryDocument> {
+        val q = query.lowercase(Locale.US)
+        return documents.filter { doc ->
+            doc.title.lowercase(Locale.US).contains(q) ||
+            doc.content.lowercase(Locale.US).contains(q) ||
+            doc.keywords.any { it.contains(q) }
+        }
+    }
+
+    /**
+     * Retrieve a document by ID.
+     */
+    fun getById(id: String): LibraryDocument? {
+        return documents.find { it.id == id }
+    }
+}
+
+// -------------------- Data Model --------------------
+
+data class LibraryDocument(
+    val id: String,
+    val title: String,
+    val category: String,      // Course or topic
+    val content: String,       // Plain extracted text
+    val keywords: List<String> // Used for fast matching
+)
+
+// -------------------- Extension --------------------
+
+private fun JSONArray.toList(): List<String> {
+    val list = mutableListOf<String>()
+    for (i in 0 until length()) {
+        list.add(getString(i))
+    }
+    return list
+}
+// -------------------- Phase 4: FlashcardEngine.kt --------------------
+package com.monster.study.revision
+
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * FlashcardEngine
+ * Core revision logic: flashcards, cloze, MCQs, recall tracking.
+ * Offline and deterministic.
+ */
+object FlashcardEngine {
+
+    // -------------------- Internal State --------------------
+
+    private val cards = mutableListOf<Flashcard>()
+    private val performance = ConcurrentHashMap<String, RecallStats>()
+
+    // -------------------- Flashcards --------------------
+
+    fun addFlashcard(question: String, answer: String, category: String) {
+        cards.add(
+            Flashcard(
+                id = UUID.randomUUID().toString(),
+                question = question.trim(),
+                answer = answer.trim(),
+                category = category.trim()
+            )
+        )
+    }
+
+    fun getFlashcardsByCategory(category: String): List<Flashcard> {
+        return cards.filter { it.category.equals(category, ignoreCase = true) }
+    }
+
+    // -------------------- Cloze Deletion --------------------
+
+    fun generateCloze(text: String): ClozeCard {
+        val words = text.split(" ")
+        val index = (words.indices).random()
+        val missing = words[index]
+
+        val clozeText = words.mapIndexed { i, w ->
+            if (i == index) "____" else w
+        }.joinToString(" ")
+
+        return ClozeCard(
+            text = clozeText,
+            answer = missing
+        )
+    }
+
+    // -------------------- MCQ --------------------
+
+    fun generateMCQ(correct: String, distractors: List<String>): MCQ {
+        val options = (distractors + correct).shuffled()
+        return MCQ(
+            question = "Choose the correct answer:",
+            options = options,
+            correctAnswer = correct
+        )
+    }
+
+    // -------------------- Recall Tracking --------------------
+
+    fun recordRecall(cardId: String, success: Boolean) {
+        val stats = performance.getOrPut(cardId) { RecallStats() }
+        if (success) stats.correct++ else stats.incorrect++
+    }
+
+    fun getRecallStats(cardId: String): RecallStats {
+        return performance.getOrDefault(cardId, RecallStats())
+    }
+
+    /**
+     * Used by analytics to find weak areas.
+     */
+    fun weakestCards(limit: Int = 5): List<String> {
+        return performance.entries
+            .sortedBy { it.value.accuracy() }
+            .take(limit)
+            .map { it.key }
+    }
+}
+
+// -------------------- Data Models --------------------
+
+data class Flashcard(
+    val id: String,
+    val question: String,
+    val answer: String,
+    val category: String
+)
+
+data class ClozeCard(
+    val text: String,
+    val answer: String
+)
+
+data class MCQ(
+    val question: String,
+    val options: List<String>,
+    val correctAnswer: String
+)
+
+data class RecallStats(
+    var correct: Int = 0,
+    var incorrect: Int = 0
+) {
+    fun accuracy(): Double {
+        val total = correct + incorrect
+        return if (total == 0) 0.0 else correct.toDouble() / total
+    }
+}
+
+// -------------------- Phase 5: RevisionAnalytics.kt --------------------
+package com.monster.study.analytics
+
+import com.monster.study.revision.RecallStats
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * RevisionAnalytics
+ * Transforms recall data into confidence intelligence.
+ */
+object RevisionAnalytics {
+
+    // topic -> cardIds
+    private val topicIndex = ConcurrentHashMap<String, MutableSet<String>>()
+
+    // cardId -> confidence score (0.0 - 1.0)
+    private val confidenceMap = ConcurrentHashMap<String, Double>()
+
+    // -------------------- Topic Mapping --------------------
+
+    fun registerCard(cardId: String, topic: String) {
+        topicIndex.getOrPut(topic.lowercase()) { mutableSetOf() }.add(cardId)
+    }
+
+    // -------------------- Confidence Computation --------------------
+
+    /**
+     * Confidence is intentionally conservative.
+     * Penalizes inconsistency heavily.
+     */
+    fun computeConfidence(stats: RecallStats): Double {
+        val total = stats.correct + stats.incorrect
+        if (total == 0) return 0.0
+
+        val rawAccuracy = stats.correct.toDouble() / total
+        val volatilityPenalty = stats.incorrect.toDouble() / total
+
+        return (rawAccuracy * (1 - volatilityPenalty)).coerceIn(0.0, 1.0)
+    }
+
+    fun updateConfidence(cardId: String, stats: RecallStats) {
+        confidenceMap[cardId] = computeConfidence(stats)
+    }
+
+    fun getCardConfidence(cardId: String): Double {
+        return confidenceMap.getOrDefault(cardId, 0.0)
+    }
+
+    // -------------------- Topic-Level Intelligence --------------------
+
+    fun topicConfidence(topic: String): Double {
+        val cards = topicIndex[topic.lowercase()] ?: return 0.0
+        if (cards.isEmpty()) return 0.0
+
+        val total = cards.sumOf { getCardConfidence(it) }
+        return (total / cards.size).coerceIn(0.0, 1.0)
+    }
+
+    fun weakestTopics(limit: Int = 3): List<String> {
+        return topicIndex.keys
+            .sortedBy { topicConfidence(it) }
+            .take(limit)
+    }
+
+    fun strongestTopics(limit: Int = 3): List<String> {
+        return topicIndex.keys
+            .sortedByDescending { topicConfidence(it) }
+            .take(limit)
+    }
+}
+// -------------------- Phase 6: AdaptiveScheduler.kt --------------------
+package com.monster.study.scheduler
+
+import com.monster.study.analytics.RevisionAnalytics
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToLong
+
+/**
+ * AdaptiveScheduler
+ * Schedules revision timing using confidence-based decay.
+ */
+object AdaptiveScheduler {
+
+    // cardId -> next review timestamp (epoch millis)
+    private val scheduleMap = ConcurrentHashMap<String, Long>()
+
+    // -------------------- Scheduling Logic --------------------
+
+    /**
+     * Confidence-to-interval mapping (hours).
+     * Conservative by design.
+     */
+    private fun intervalFromConfidence(confidence: Double): Long {
+        return when {
+            confidence >= 0.9 -> 168    // 7 days
+            confidence >= 0.75 -> 72    // 3 days
+            confidence >= 0.6 -> 24     // 1 day
+            confidence >= 0.4 -> 8      // 8 hours
+            confidence >= 0.25 -> 2     // 2 hours
+            else -> 1                   // 1 hour (critical)
+        }
+    }
+
+    fun schedule(cardId: String) {
+        val confidence = RevisionAnalytics.getCardConfidence(cardId)
+        val intervalHours = intervalFromConfidence(confidence)
+
+        val nextReview = Instant.now()
+            .plusSeconds(intervalHours * 3600)
+            .toEpochMilli()
+
+        scheduleMap[cardId] = nextReview
+    }
+
+    fun forceImmediate(cardId: String) {
+        scheduleMap[cardId] = Instant.now().toEpochMilli()
+    }
+
+    // -------------------- Query API --------------------
+
+    fun isDue(cardId: String): Boolean {
+        val next = scheduleMap[cardId] ?: return true
+        return Instant.now().toEpochMilli() >= next
+    }
+
+    fun nextReviewTime(cardId: String): Long? {
+        return scheduleMap[cardId]
+    }
+
+    fun dueCards(limit: Int = 10): List<String> {
+        val now = Instant.now().toEpochMilli()
+        return scheduleMap
+            .filterValues { it <= now }
+            .keys
+            .take(limit)
+    }
+}
+// -------------------- Phase 7: SemanticInterpreter.kt --------------------
+package com.monster.study.ai
+
+import com.monster.study.library.DocumentLibrary
+import com.monster.study.memory.MemoryManager
+import com.monster.study.revision.FlashcardEngine
+import java.util.Locale
+
+/**
+ * SemanticInterpreter
+ * Interprets user queries semantically and routes to correct module.
+ */
+object SemanticInterpreter {
+
+    /**
+     * Process a raw user query
+     */
+    fun processQuery(query: String): Interpretation {
+        val normalized = query.lowercase(Locale.US).trim()
+
+        // -------------------- Memory --------------------
+        if (normalized.contains("remember") || normalized.contains("note")) {
+            val key = normalized.substringAfterLast("remember").trim()
+            val value = normalized.substringBeforeLast("remember").trim()
+            return Interpretation(
+                target = "MEMORY",
+                action = "STORE",
+                key = key,
+                value = value
+            )
+        }
+
+        if (normalized.contains("forget") || normalized.contains("delete")) {
+            val key = normalized.substringAfterLast("forget").trim()
+            return Interpretation(
+                target = "MEMORY",
+                action = "DELETE",
+                key = key
+            )
+        }
+
+        // -------------------- Document Search --------------------
+        if (normalized.contains("search") || normalized.contains("find")) {
+            val topic = normalized.substringAfterLast("search").trim()
+            return Interpretation(
+                target = "LIBRARY",
+                action = "SEARCH",
+                key = topic
+            )
+        }
+
+        // -------------------- Flashcards / Revision --------------------
+        if (normalized.contains("quiz") || normalized.contains("mcq") || normalized.contains("cloze")) {
+            return Interpretation(
+                target = "REVISION",
+                action = "GENERATE"
+            )
+        }
+
+        // -------------------- Video Requests --------------------
+        if (normalized.contains("video") || normalized.contains("visual") || normalized.contains("watch")) {
+            val topic = normalized.substringAfterLast("video").trim()
+            return Interpretation(
+                target = "VIDEO",
+                action = "REQUEST",
+                key = topic
+            )
+        }
+
+        return Interpretation(target = "UNKNOWN", action = "NONE")
+    }
+
+}
+
+// -------------------- Data Model --------------------
+
+data class Interpretation(
+    val target: String, // MEMORY, LIBRARY, REVISION, VIDEO, UNKNOWN
+    val action: String, // STORE, DELETE, SEARCH, GENERATE, REQUEST, NONE
+    val key: String? = null,
+    val value: String? = null
+)
+// -------------------- Phase 8: ResponseGenerator.kt --------------------
+package com.monster.study.ai
+
+import com.monster.study.analytics.RevisionAnalytics
+import com.monster.study.library.DocumentLibrary
+import com.monster.study.memory.MemoryManager
+import com.monster.study.revision.FlashcardEngine
+import java.util.Locale
+
+/**
+ * ResponseGenerator
+ * Generates adaptive, offline responses for Monster.
+ */
+object ResponseGenerator {
+
+    /**
+     * Main entry point
+     */
+    fun generateResponse(query: String): String {
+        val interp = SemanticInterpreter.processQuery(query)
+
+        return when (interp.target) {
+            "MEMORY" -> handleMemory(interp)
+            "LIBRARY" -> handleLibrary(interp)
+            "REVISION" -> handleRevision(interp)
+            "VIDEO" -> handleVideo(interp)
+            else -> "I am not sure how to respond to that."
+        }
+    }
+
+    // -------------------- Handlers --------------------
+
+    private fun handleMemory(interp: Interpretation): String {
+        return when (interp.action) {
+            "STORE" -> {
+                val key = interp.key ?: return "Cannot store. No key specified."
+                val value = interp.value ?: return "Cannot store. No value specified."
+                MemoryManager.remember(MonsterContext.appContext, key, value)
+                "Noted '$value' under '$key'."
+            }
+            "DELETE" -> {
+                val key = interp.key ?: return "Cannot delete. No key specified."
+                val success = MemoryManager.forget(MonsterContext.appContext, key)
+                if (success) "Memory '$key' deleted." else "No memory found for '$key'."
+            }
+            else -> "Memory action not recognized."
+        }
+    }
+
+    private fun handleLibrary(interp: Interpretation): String {
+        val topic = interp.key ?: return "Please specify a topic to search."
+        val results = DocumentLibrary.search(topic)
+        return if (results.isEmpty()) "No documents found on '$topic'." else
+            "Found ${results.size} document(s) for '$topic'. Top result: '${results.first().title}'"
+    }
+
+    private fun handleRevision(interp: Interpretation): String {
+        // For simplicity, return one flashcard preview
+        val cards = FlashcardEngine.getFlashcardsByCategory(interp.key ?: "")
+        return if (cards.isEmpty()) "No flashcards available for revision." else {
+            val card = cards.random()
+            "Revision Card: ${card.question} [Answer hidden]"
+        }
+    }
+
+    private fun handleVideo(interp: Interpretation): String {
+        val topic = interp.key ?: return "Please specify a topic for video."
+        return "Prepared offline video recommendation for '$topic'."
+    }
+}
+
+// -------------------- Context Holder --------------------
+// Minimal context provider for static calls
+object MonsterContext {
+    lateinit var appContext: android.content.Context
+}
+
+
+// -------------------- Phase 9: VoiceProcessor.kt --------------------
+package com.monster.study.voice
+
+import android.content.Context
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.RecognitionListener
+import android.os.Bundle
+import com.monster.study.ai.ResponseGenerator
+import com.monster.study.ai.MonsterContext
+import java.util.Locale
+
+/**
+ * VoiceProcessor
+ * Handles offline voice input and routes to Monster AI.
+ */
+class VoiceProcessor(private val context: Context, private val callback: (String) -> Unit) {
+
+    private val recognizer: SpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+
+    init {
+        MonsterContext.appContext = context
+
+        recognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+
+            override fun onError(error: Int) {
+                callback("Voice input error: $error")
+            }
+
+            override fun onResults(results: Bundle?) {
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val query = matches?.firstOrNull() ?: ""
+                if (query.isNotBlank()) {
+                    val response = ResponseGenerator.generateResponse(query)
+                    callback(response)
+                } else {
+                    callback("No speech recognized.")
+                }
+            }
+        })
+    }
+
+    /**
+     * Start listening
+     */
+    fun startListening() {
+        val intent = RecognizerIntent().apply {
+            action = RecognizerIntent.ACTION_RECOGNIZE_SPEECH
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+        }
+        recognizer.startListening(intent)
+    }
+
+    /**
+     * Stop listening
+     */
+    fun stopListening() {
+        recognizer.stopListening()
+    }
+
+    /**
+     * Destroy resources
+     */
+    fun destroy() {
+        recognizer.destroy()
+    }
+}
+// -------------------- Phase 10: TTSManager.kt --------------------
+package com.monster.study.tts
+
+import android.content.Context
+import android.speech.tts.TextToSpeech
+import android.widget.Toast
+import java.util.Locale
+
+/**
+ * TTSManager
+ * Offline text-to-speech engine for Monster AI.
+ */
+class TTSManager(private val context: Context) : TextToSpeech.OnInitListener {
+
+    private var tts: TextToSpeech? = null
+    private val languages = mutableListOf(Locale.US)
+    private var currentLangIndex = 0
+
+    init {
+        tts = TextToSpeech(context, this)
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            tts?.language = languages[currentLangIndex]
+        } else {
+            Toast.makeText(context, "TTS Initialization failed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Speak text immediately
+     */
+    fun speak(text: String) {
+        tts?.language = languages[currentLangIndex]
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+    }
+
+    /**
+     * Switch language
+     */
+    fun nextLanguage() {
+        currentLangIndex = (currentLangIndex + 1) % languages.size
+        tts?.language = languages[currentLangIndex]
+        Toast.makeText(context, "Language switched", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Add a new language dynamically
+     */
+    fun addLanguage(locale: Locale) {
+        if (!languages.contains(locale)) languages.add(locale)
+    }
+
+    /**
+     * Stop speaking immediately
+     */
+    fun stop() {
+        tts?.stop()
+    }
+
+    /**
+     * Destroy TTS resources
+     */
+    fun destroy() {
+        tts?.shutdown()
+    }
+}
+// -------------------- Phase 11: MisleadingDetector.kt --------------------
+package com.monster.study.analytics
+
+import com.monster.study.library.DocumentLibrary
+import java.util.Locale
+
+/**
+ * MisleadingDetector
+ * Detects potential misleading or inconsistent information in library documents.
+ */
+object MisleadingDetector {
+
+    /**
+     * Analyze documents for repeated contradictory phrases or suspicious keywords.
+     */
+    fun scanDocuments(): List<FlaggedDocument> {
+        val flagged = mutableListOf<FlaggedDocument>()
+        val suspiciousKeywords = listOf("always", "never", "guaranteed", "100%", "failsafe", "impossible")
+
+        DocumentLibrary.getByCategory("") // Empty category to get all
+            .forEach { doc ->
+                val issues = mutableListOf<String>()
+                val content = doc.content.lowercase(Locale.US)
+                suspiciousKeywords.forEach { kw ->
+                    if (content.contains(kw)) issues.add("Suspicious keyword: '$kw'")
+                }
+                if (issues.isNotEmpty()) {
+                    flagged.add(FlaggedDocument(doc.id, doc.title, issues))
+                }
+            }
+
+        return flagged
+    }
+}
+
+// -------------------- Data Model --------------------
+
+data class FlaggedDocument(
+    val id: String,
+    val title: String,
+    val issues: List<String>
+)
+// -------------------- Phase 12: ProgressTracker.kt --------------------
+package com.monster.study.analytics
+
+import com.monster.study.revision.FlashcardEngine
+import com.monster.study.revision.RecallStats
+import java.io.File
+import java.io.FileReader
+import java.io.FileWriter
+import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONArray
+import org.json.JSONObject
+import android.content.Context
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+/**
+ * ProgressTracker
+ * Tracks flashcard revision progress and provides offline statistics.
+ */
+object ProgressTracker {
+
+    private const val FILE_NAME = "revision_progress.json"
+    private val progressMap = ConcurrentHashMap<String, RecallStats>()
+
+    private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+        .withZone(ZoneId.systemDefault())
+
+    fun load(context: Context) {
+        val file = File(context.filesDir, FILE_NAME)
+        if (!file.exists()) return
+
+        val jsonArray = JSONArray(file.readText())
+        for (i in 0 until jsonArray.length()) {
+            val obj = jsonArray.getJSONObject(i)
+            val id = obj.getString("id")
+            val stats = RecallStats(obj.getInt("correct"), obj.getInt("incorrect"))
+            progressMap[id] = stats
+        }
+    }
+
+    fun save(context: Context) {
+        val array = JSONArray()
+        progressMap.forEach { (id, stats) ->
+            val obj = JSONObject()
+            obj.put("id", id)
+            obj.put("correct", stats.correct)
+            obj.put("incorrect", stats.incorrect)
+            array.put(obj)
+        }
+        File(context.filesDir, FILE_NAME).writeText(array.toString())
+    }
+
+    fun record(cardId: String, success: Boolean) {
+        val stats = progressMap.getOrPut(cardId) { RecallStats() }
+        if (success) stats.correct++ else stats.incorrect++
+        progressMap[cardId] = stats
+    }
+
+    fun masteryPercentage(cardId: String): Double {
+        val stats = progressMap[cardId] ?: return 0.0
+        val total = stats.correct + stats.incorrect
+        return if (total == 0) 0.0 else (stats.correct.toDouble() / total) * 100
+    }
+
+    fun dailySummary(): String {
+        val today = dateFormatter.format(Instant.now())
+        val totalCards = progressMap.size
+        val mastered = progressMap.values.count { it.accuracy() >= 0.9 }
+        return "Date: $today | Total Cards: $totalCards | Mastered: $mastered"
+    }
+}
+// -------------------- Phase 11: MisleadingDetector.kt --------------------
+package com.monster.study.analytics
+
+import com.monster.study.library.DocumentLibrary
+import java.util.Locale
+
+/**
+ * MisleadingDetector
+ * Detects potential misleading or inconsistent information in library documents.
+ */
+object MisleadingDetector {
+
+    /**
+     * Analyze documents for repeated contradictory phrases or suspicious keywords.
+     */
+    fun scanDocuments(): List<FlaggedDocument> {
+        val flagged = mutableListOf<FlaggedDocument>()
+        val suspiciousKeywords = listOf("always", "never", "guaranteed", "100%", "failsafe", "impossible")
+
+        DocumentLibrary.getByCategory("") // Empty category to get all
+            .forEach { doc ->
+                val issues = mutableListOf<String>()
+                val content = doc.content.lowercase(Locale.US)
+                suspiciousKeywords.forEach { kw ->
+                    if (content.contains(kw)) issues.add("Suspicious keyword: '$kw'")
+                }
+                if (issues.isNotEmpty()) {
+                    flagged.add(FlaggedDocument(doc.id, doc.title, issues))
+                }
+            }
+
+        return flagged
+    }
+}
+
+// -------------------- Data Model --------------------
+
+data class FlaggedDocument(
+    val id: String,
+    val title: String,
+    val issues: List<String>
+)
+
+// -------------------- Phase 13: MindMapGenerator.kt --------------------
+package com.monster.study.analytics
+
+import com.monster.study.library.DocumentLibrary
+import com.monster.study.revision.FlashcardEngine
+
+/**
+ * MindMapGenerator
+ * Generates a hierarchical mind map from library and flashcard data.
+ */
+object MindMapGenerator {
+
+    /**
+     * Generate mind map for a given topic
+     */
+    fun generateMindMap(topic: String): MindMapNode {
+        val root = MindMapNode(topic)
+
+        // Add library documents as first-level nodes
+        val docs = DocumentLibrary.getByCategory(topic)
+        docs.forEach { doc ->
+            val docNode = MindMapNode(doc.title)
+            root.children.add(docNode)
+
+            // Add flashcards as leaf nodes under document
+            val cards = FlashcardEngine.getFlashcardsByCategory(doc.title)
+            cards.forEach { card ->
+                docNode.children.add(MindMapNode(card.question))
+            }
+        }
+
+        return root
+    }
+}
+
+// -------------------- Data Model --------------------
+
+data class MindMapNode(
+    val title: String,
+    val children: MutableList<MindMapNode> = mutableListOf()
+)
+// -------------------- Phase 14: VideoPlayer.kt (Enhanced) --------------------
+package com.monster.study.video
+
+import android.content.Context
+import android.net.Uri
+import android.widget.MediaController
+import android.widget.VideoView
+import kotlin.random.Random
+
+/**
+ * VideoPlayer
+ * Plays offline videos focused on revision topics with dynamic diversity and user-controlled refresh.
+ */
+class VideoPlayer(private val context: Context, private val videoView: VideoView) {
+
+    // Map topic/subtopic -> list of local video URIs
+    private val topicLibrary: MutableMap<String, MutableList<Uri>> = mutableMapOf()
+
+    // Track last played index per topic/subtopic
+    private val lastPlayedIndex: MutableMap<String, Int> = mutableMapOf()
+
+    /**
+     * Register videos for a specific topic/subtopic
+     */
+    fun registerVideos(topic: String, videos: List<Uri>) {
+        topicLibrary[topic.lowercase()] = videos.toMutableList()
+    }
+
+    /**
+     * Play a topic-focused video
+     * Picks a different video on subsequent calls for diversity
+     */
+    fun playTopicVideo(topic: String) {
+        playNextVideo(topic, forceNext = false)
+    }
+
+    /**
+     * User requests next video manually
+     */
+    fun playNextVideo(topic: String, forceNext: Boolean = true) {
+        val topicKey = topic.lowercase()
+        val videos = topicLibrary[topicKey]
+        if (videos.isNullOrEmpty()) {
+            throw IllegalArgumentException("No videos registered for topic '$topic'")
+        }
+
+        // Determine next index
+        val lastIndex = lastPlayedIndex[topicKey] ?: -1
+        val newIndex = if (forceNext || lastIndex == -1) {
+            generateSequence { Random.nextInt(videos.size) }
+                .first { it != lastIndex }
+        } else lastIndex
+
+        val videoUri = videos[newIndex]
+        lastPlayedIndex[topicKey] = newIndex
+
+        videoView.setVideoURI(videoUri)
+        videoView.setMediaController(MediaController(context))
+        videoView.requestFocus()
+        videoView.start()
+    }
+
+    /**
+     * Stop current video
+     */
+    fun stop() {
+        if (videoView.isPlaying) {
+            videoView.stopPlayback()
+        }
+    }
+
+    /**
+     * Clear all topic/subtopic video mappings
+     */
+    fun clearLibrary() {
+        topicLibrary.clear()
+        lastPlayedIndex.clear()
+    }
+}
+
+// -------------------- Phase 15: CollaborativeHub.kt --------------------
+package com.monster.study.online
+
+import java.util.*
+
+// -------------------- Participant & Roles --------------------
+data class Participant(
+    val id: String,
+    val name: String,
+    val avatarUri: String? = null,
+    val role: Role = Role.MEMBER,
+    var lastActive: Long = System.currentTimeMillis()
+)
+
+enum class Role { ADMIN, MEMBER }
+
+// -------------------- Shared Content --------------------
+data class SharedContent(
+    val id: String = UUID.randomUUID().toString(),
+    val type: ContentType,
+    val title: String,
+    val uri: String,  // local path or online link
+    val uploadedBy: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+enum class ContentType { DOCUMENT, FLASHCARD, MINDMAP, VIDEO, NOTE }
+
+// -------------------- Group Messages --------------------
+data class GroupMessage(
+    val senderId: String,
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val sharedContent: SharedContent? = null
+)
+
+// -------------------- Video Call --------------------
+data class VideoCall(
+    val callId: String = UUID.randomUUID().toString(),
+    val startedBy: String,
+    val participants: MutableList<Participant> = mutableListOf(),
+    var isActive: Boolean = true
+)
+
+// -------------------- Study Group --------------------
+data class StudyGroup(
+    val id: String,
+    val name: String,
+    val members: MutableList<Participant> = mutableListOf(),
+    val messages: MutableList<GroupMessage> = mutableListOf(),
+    var activeVideoCall: VideoCall? = null
+)
+
+// -------------------- Collaborative Hub --------------------
+object CollaborativeHub {
+
+    private val groups = mutableMapOf<String, StudyGroup>()
+
+    // Create a new group with admin
+    fun createGroup(id: String, name: String, admin: Participant) {
+        val group = StudyGroup(id, name, mutableListOf(admin))
+        groups[id] = group
+    }
+
+    // Join an existing group
+    fun joinGroup(groupId: String, participant: Participant) {
+        groups[groupId]?.members?.add(participant)
+    }
+
+    // Post a message or share content
+    fun postMessage(groupId: String, senderId: String, content: String, shared: SharedContent? = null) {
+        val group = groups[groupId] ?: return
+        group.messages.add(GroupMessage(senderId, content, System.currentTimeMillis(), shared))
+        // TODO: trigger online sync if connected
+    }
+
+    // Share content in a group
+    fun shareContent(groupId: String, content: SharedContent) {
+        val group = groups[groupId] ?: return
+        group.messages.add(GroupMessage(content.uploadedBy, "Shared: ${content.title}", System.currentTimeMillis(), content))
+    }
+
+    // Start a live video call
+    fun startVideoCall(groupId: String, startedBy: String) {
+        val group = groups[groupId] ?: return
+        if (group.activeVideoCall?.isActive == true) return  // Only one active call per group
+        val call = VideoCall(startedBy = startedBy)
+        call.participants.addAll(group.members)
+        group.activeVideoCall = call
+    }
+
+    // End an active video call
+    fun endVideoCall(groupId: String) {
+        val group = groups[groupId] ?: return
+        group.activeVideoCall?.isActive = false
+        group.activeVideoCall = null
+    }
+
+    // Get active video call participants
+    fun getVideoCallParticipants(groupId: String): List<Participant> {
+        return groups[groupId]?.activeVideoCall?.participants ?: emptyList()
+    }
+
+    // List all messages in a group
+    fun listMessages(groupId: String): List<GroupMessage> = groups[groupId]?.messages ?: emptyList()
+
+    // List all groups
+    fun listGroups(): List<StudyGroup> = groups.values.toList()
+
+    // List all participants in a group
+    fun getGroupParticipants(groupId: String): List<Participant> = groups[groupId]?.members ?: emptyList()
+}
+// -------------------- Phase 16+17: AITutorSmartBoard.kt --------------------
+package com.monster.study.online
+
+import android.content.Context
+import java.util.*
+import kotlin.concurrent.thread
+
+// -------------------- Smart Board Content --------------------
+data class BoardContent(
+    val id: String = UUID.randomUUID().toString(),
+    val title: String,
+    val content: String,      // Could be text, diagram code, or markup
+    val timestamp: Long = System.currentTimeMillis(),
+    val updatedBy: String = "Monster" // AI or participant
+)
+
+// -------------------- Smart Board Manager --------------------
+object SmartBoardManager {
+
+    private val sessionBoards = mutableMapOf<String, MutableList<BoardContent>>() // groupId -> contents
+    private val userOverrides = mutableSetOf<String>() // groupId for users who override
+
+    /** Post new content to smart board */
+    fun postContent(groupId: String, content: BoardContent) {
+        val board = sessionBoards.getOrPut(groupId) { mutableListOf() }
+        board.add(content)
+        // TODO: Sync to participants in online session
+    }
+
+    /** Get current smart board content */
+    fun getBoardContent(groupId: String): List<BoardContent> {
+        return sessionBoards[groupId] ?: emptyList()
+    }
+
+    /** User toggles override (view notes or library) */
+    fun toggleUserOverride(groupId: String, override: Boolean) {
+        if (override) userOverrides.add(groupId) else userOverrides.remove(groupId)
+    }
+
+    /** Check if user is currently overriding the smart board */
+    fun isUserOverriding(groupId: String): Boolean {
+        return userOverrides.contains(groupId)
+    }
+}
+
+// -------------------- AI Tutor Enhanced --------------------
+object AITutorSmartBoard {
+
+    /** Analyze messages to detect topics needing explanation */
+    fun analyzeSessionMessages(messages: List<GroupMessage>): List<String> {
+        return messages.mapNotNull { msg ->
+            if (msg.content.contains("explain", true) ||
+                msg.content.contains("help", true) ||
+                msg.content.contains("define", true)
+            ) msg.content else null
+        }
+    }
+
+    /** Suggest relevant learning materials from Monster library (offline) */
+    fun suggestMaterials(topic: String, context: Context): List<SharedContent> {
+        // TODO: Implement offline library search (Phases 3, 13, 14)
+        return emptyList()
+    }
+
+    /** Generate a mini-quiz based on topic */
+    fun generateQuiz(topic: String): String {
+        return "Quiz on \"$topic\": Choose the correct answer..."
+    }
+
+    /** Pick a random participant from the group */
+    fun pickRandomParticipant(groupId: String): Participant? {
+        val participants = CollaborativeHub.getGroupParticipants(groupId)
+        if (participants.isEmpty()) return null
+        return participants.random()
+    }
+
+    /** Ask a random participant a question */
+    fun askRandomParticipant(groupId: String, question: String) {
+        val participant = pickRandomParticipant(groupId) ?: return
+        CollaborativeHub.postMessage(
+            groupId,
+            senderId = "Monster",
+            content = "Question for ${participant.name}: $question"
+        )
+    }
+
+    /** Perform online search if query not found in library */
+    fun searchOnline(query: String, callback: (String) -> Unit) {
+        thread {
+            Thread.sleep(500) // Simulate network delay
+            callback("Online info for \"$query\". Replace with real API call.")
+        }
+    }
+
+    /** Respond to a participant query dynamically */
+    fun respondToQuery(query: String, context: Context, groupId: String) {
+        val offlineResults = suggestMaterials(query, context)
+        if (offlineResults.isNotEmpty()) {
+            CollaborativeHub.postMessage(
+                groupId,
+                senderId = "Monster",
+                content = "Monster suggests offline resources for \"$query\": ${offlineResults.joinToString { it.title }}"
+            )
+        } else {
+            searchOnline(query) { result ->
+                CollaborativeHub.postMessage(
+                    groupId,
+                    senderId = "Monster",
+                    content = "Monster found online info for \"$query\": $result"
+                )
+            }
+        }
+    }
+
+    /** Assist in session dynamically: explain topics, suggest materials, quiz participants, and update board */
+    fun assistInSession(groupId: String, context: Context) {
+        val messages = CollaborativeHub.listMessages(groupId)
+        val topics = analyzeSessionMessages(messages)
+
+        for (topic in topics) {
+            // Post smart board content
+            if (!SmartBoardManager.isUserOverriding(groupId)) {
+                SmartBoardManager.postContent(
+                    groupId,
+                    BoardContent(title = "Teaching: $topic", content = "Monster explains: $topic")
+                )
+            }
+
+            // Suggest offline/online resources
+            respondToQuery(topic, context, groupId)
+
+            // Generate quiz and ask a random participant
+            val quiz = generateQuiz(topic)
+            askRandomParticipant(groupId, quiz)
+        }
+    }
+
+    /** Post interactive suggestions: videos, mind maps, or flashcards */
+    fun postInteractiveSuggestions(topic: String, groupId: String, context: Context) {
+        val resources = suggestMaterials(topic, context)
+        for (res in resources) {
+            CollaborativeHub.postMessage(
+                groupId,
+                senderId = "Monster",
+                content = "Suggested resource: ${res.title} (${res.type})"
+            )
+        }
+    }
+}
